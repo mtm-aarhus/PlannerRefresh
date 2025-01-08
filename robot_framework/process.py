@@ -46,6 +46,8 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     try:
         download_planner(downloads_folder, planner_url, final_file_path)
         upload_file_to_sharepoint(client, sharepoint_folder, final_file_path, orchestrator_connection)
+        if os.path.exists(final_file_path):
+            os.remove(final_file_path)
     except:
         try:
             os.remove(final_file_path)
