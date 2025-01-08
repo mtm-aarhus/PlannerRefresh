@@ -120,7 +120,7 @@ def download_planner(downloads_folder, planner_url, final_file_path):
 
     except:
         try:
-            os.remove(downloaded_file)
+            os.remove(final_file_path)
         except FileNotFoundError as e:
             print(f"Tried removing downloaded file, didn't exist: {e}")
         driver.quit()
