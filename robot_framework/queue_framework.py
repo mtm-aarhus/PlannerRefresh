@@ -27,7 +27,6 @@ def main():
     queue_element = None
     error_count = 0
     task_count = 0
-    queue_attempts = config.QUEUE_ATTEMPTS
 
     # Retry loop
     for _ in range(config.MAX_RETRY_COUNT):
@@ -44,13 +43,13 @@ def main():
                     break  # Break queue loop
 
                 try:
-                    for attempt in range(1, queue_attempts + 1):
+                    for attempt in range(1, config.QUEUE_ATTEMPTS + 1):
                         try:
                             process.process(orchestrator_connection, queue_element)
                             break
                         except Exception as e:
                             orchestrator_connection.log_info(f"Attempt {attempt} failed: {e}")
-                            if attempt < queue_attempts:
+                            if attempt < config.QUEUE_ATTEMPTS:
                                 orchestrator_connection.log_info("Retrying queue element")
                                 reset.reset(orchestrator_connection)
                             else:
