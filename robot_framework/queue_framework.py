@@ -51,7 +51,8 @@ def main():
                         except Exception as e:
                             print(f"Attempt {attempt} failed: {e}")
                             if attempt < queue_attempts:
-                                print("Retrying queue eleement")
+                                print("Retrying queue element")
+                                reset.reset(orchestrator_connection)
                             else:
                                 raise
 
