@@ -4,6 +4,7 @@
 # pylint: disable=duplicate-code
 
 import sys
+import time
 
 from OpenOrchestrator.orchestrator_connection.connection import OrchestratorConnection
 from OpenOrchestrator.database.queues import QueueStatus
@@ -26,6 +27,8 @@ def main():
     queue_element = None
     error_count = 0
     task_count = 0
+    queue_attempts = config.QUEUE_ATTEMPTS
+
     # Retry loop
     for _ in range(config.MAX_RETRY_COUNT):
         try:
@@ -41,7 +44,17 @@ def main():
                     break  # Break queue loop
 
                 try:
-                    process.process(orchestrator_connection, queue_element)
+                    for attempt in range(1, queue_attempts + 1):
+                        try:
+                            process.process(orchestrator_connection, queue_element)
+                            break
+                        except Exception as e:
+                            print(f"Attempt {attempt} failed: {e}")
+                            if attempt < queue_attempts:
+                                print("Retrying queue eleement")
+                            else:
+                                raise
+
                     orchestrator_connection.set_queue_element_status(queue_element.id, QueueStatus.DONE)
 
                 except BusinessError as error:
