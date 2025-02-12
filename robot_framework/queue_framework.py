@@ -49,9 +49,9 @@ def main():
                             process.process(orchestrator_connection, queue_element)
                             break
                         except Exception as e:
-                            print(f"Attempt {attempt} failed: {e}")
+                            orchestrator_connection.log_info(f"Attempt {attempt} failed: {e}")
                             if attempt < queue_attempts:
-                                print("Retrying queue element")
+                                orchestrator_connection.log_info("Retrying queue element")
                                 reset.reset(orchestrator_connection)
                             else:
                                 raise
