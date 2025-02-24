@@ -39,7 +39,7 @@ def download_planner(downloads_folder, planner_url, final_file_path):
         first_element.click()
 
         # Wait for the second element and click the export button
-        export_button = wait.until(EC.presence_of_element_located((By.XPATH, "//button[.//span[text()='Eksporter plan til Excel' or text()='Export plan to Excel']]")))
+        export_button = wait.until(EC.presence_of_element_located((By.XPATH, "//button[.//span[text()='Eksportér plan til Excel' or text()='Export plan to Excel']]")))
         export_button.click()
 
         # Wait for download to complete
