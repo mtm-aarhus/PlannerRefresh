@@ -21,7 +21,7 @@ def main():
     orchestrator_connection = OrchestratorConnection.create_connection_from_args()
     sys.excepthook = log_exception(orchestrator_connection)
 
-    orchestrator_connection.log_trace("Robot Framework started.")
+    client = orchestrator_connection.log_trace("Robot Framework started.")
     initialize.initialize(orchestrator_connection)
 
     queue_element = None
@@ -45,7 +45,7 @@ def main():
                 try:
                     for attempt in range(1, config.QUEUE_ATTEMPTS + 1):
                         try:
-                            process.process(orchestrator_connection, queue_element)
+                            process.process(orchestrator_connection, queue_element, client)
                             break
                         except Exception as e:
                             orchestrator_connection.log_info(f"Attempt {attempt} failed: {e}")

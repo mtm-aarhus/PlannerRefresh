@@ -8,24 +8,22 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.edge.options import Options
-from office365.runtime.auth.user_credential import UserCredential
+
 from office365.sharepoint.client_context import ClientContext
+
 import os
 import time
 import json
 
 
 # pylint: disable-next=unused-argument
-def process(orchestrator_connection: OrchestratorConnection, queue_element: QueueElement | None = None) -> None:
+def process(orchestrator_connection: OrchestratorConnection, queue_element: QueueElement, client: ClientContext | None = None) -> None:
     """Do the primary process of the robot."""
     orchestrator_connection.log_trace("Running process.")
-    RobotCredentials = orchestrator_connection.get_credential("Robot365User")
-    username = RobotCredentials.username
-    password = RobotCredentials.password
+
     
     data = json.loads(queue_element.data)
      # Assign each field to a named variable
-    sharepoint_site = data.get("SharePointSite")
 
     file_name = f'{data.get("Name")}.xlsx'
     planner_url = data.get("URL")
@@ -37,14 +35,12 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
         os.remove(final_file_path)
     
 
-    sharepoint_site_base = orchestrator_connection.get_constant("AarhusKommuneSharePoint").value
-    sharepoint_site = f"{sharepoint_site_base}/teams/PlannerPowerBI"
-
-    client = sharepoint_client(username, password, sharepoint_site, orchestrator_connection)
     sharepoint_folder = "Shared Documents/PowerBi"
 
     try:
-        download_planner(downloads_folder, planner_url, final_file_path)
+        orchestrator_connection.log_info("Initializing download")
+        download_planner(downloads_folder, planner_url, final_file_path, orchestrator_connection)
+        orchestrator_connection.log_info("Uploading file to SharePoint")
         upload_file_to_sharepoint(client, sharepoint_folder, final_file_path, orchestrator_connection)
         if os.path.exists(final_file_path):
             os.remove(final_file_path)
@@ -56,7 +52,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
         raise
     
 
-def download_planner(downloads_folder, planner_url, final_file_path):
+def download_planner(downloads_folder, planner_url, final_file_path, orchestrator_connection: OrchestratorConnection):
     # Set up Edge options
     options = Options()
     options.add_argument("--user-data-dir=" + os.path.join(os.getenv("LOCALAPPDATA"), "Microsoft", "Edge", "User Data"))
@@ -78,11 +74,15 @@ def download_planner(downloads_folder, planner_url, final_file_path):
     try:
         # Navigate to Planner URL
         driver.get(planner_url)
+        
+        orchestrator_connection.log_info("Waiting for dropdown to appear")
 
         # Wait for the first element to load and interact with it
         wait = WebDriverWait(driver, 60)
         first_element = wait.until(EC.presence_of_element_located((By.XPATH, "//i[@data-icon-name='plannerChevronDownSmall']")))
         first_element.click()
+        
+        orchestrator_connection.log_info("Waiting for export button to appear")
 
         # Wait for the second element and click the export button
         export_button = wait.until(EC.presence_of_element_located((By.XPATH, "//button[.//span[text()='Eksportér plan til Excel' or text()='Export plan to Excel']]")))
@@ -92,6 +92,8 @@ def download_planner(downloads_folder, planner_url, final_file_path):
         initial_files = set(os.listdir(downloads_folder))
         timeout = 60
         start_time = time.time()
+        
+        orchestrator_connection.log_info("Waiting for download")
 
         while True:
             # Get the current list of files
@@ -104,44 +106,27 @@ def download_planner(downloads_folder, planner_url, final_file_path):
                 xlsx_files = [file for file in new_files if file.lower().endswith(".xlsx")]
                 if xlsx_files:
                     downloaded_file = os.path.join(downloads_folder, xlsx_files[0])
-                    print(f"Download completed: {downloaded_file}")
+                    orchestrator_connection.log_info(f"Download completed: {downloaded_file}")
                     break
             
             # Check for timeout
             if time.time() - start_time > timeout:
-                print("Timeout reached while waiting for a download.")
+                orchestrator_connection.log_info("Timeout reached while waiting for a download.")
                 break
             
             time.sleep(1)  # Avoid hammering the file system
 
-
-        # Optionally move the downloaded file to the final path
         os.rename(downloaded_file, final_file_path)
 
     except:
         try:
             os.remove(final_file_path)
         except FileNotFoundError as e:
-            print(f"Tried removing downloaded file, didn't exist: {e}")
+             orchestrator_connection.log_info(f"Tried removing downloaded file, didn't exist: {e}")
         driver.quit()
         raise
         
 
-
-def sharepoint_client(username: str, password: str, sharepoint_site_url: str, orchestrator_connection: OrchestratorConnection) -> ClientContext:
-    """
-    Creates and returns a SharePoint client context.
-    """
-    # Authenticate to SharePoint
-    ctx = ClientContext(sharepoint_site_url).with_credentials(UserCredential(username, password))
-
-    # Load and verify connection
-    web = ctx.web
-    ctx.load(web)
-    ctx.execute_query()
-
-    orchestrator_connection.log_info(f"Authenticated successfully. Site Title: {web.properties['Title']}")
-    return ctx
 
 def upload_file_to_sharepoint(client: ClientContext, sharepoint_file_url: str, local_file_path: str, orchestrator_connection: OrchestratorConnection):
     """
@@ -164,6 +149,8 @@ def upload_file_to_sharepoint(client: ClientContext, sharepoint_file_url: str, l
     target_folder = client.web.get_folder_by_server_relative_url(folder_path)
     client.load(target_folder)
     client.execute_query()
+    
+    orchestrator_connection.log_info("Uploading file")
 
     # Upload the file to the correct folder in SharePoint
     with open(local_file_path, "rb") as file_content:
