@@ -21,8 +21,8 @@ def main():
     orchestrator_connection = OrchestratorConnection.create_connection_from_args()
     sys.excepthook = log_exception(orchestrator_connection)
 
-    client = orchestrator_connection.log_trace("Robot Framework started.")
-    initialize.initialize(orchestrator_connection)
+    orchestrator_connection.log_trace("Robot Framework started.")
+    client = initialize.initialize(orchestrator_connection)
 
     queue_element = None
     error_count = 0
