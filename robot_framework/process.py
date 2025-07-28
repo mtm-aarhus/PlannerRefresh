@@ -74,6 +74,7 @@ def download_planner(downloads_folder, planner_url, final_file_path, orchestrato
     driver = webdriver.Edge(options=options)
     try:
         # Navigate to Planner URL
+        orchestrator_connection.log_info('Trying to get url')
         def load_url():
             driver.get(planner_url)
         
