@@ -14,6 +14,7 @@ from office365.sharepoint.client_context import ClientContext
 import os
 import time
 import json
+import threading 
 
 
 # pylint: disable-next=unused-argument
@@ -73,14 +74,20 @@ def download_planner(downloads_folder, planner_url, final_file_path, orchestrato
     driver = webdriver.Edge(options=options)
     try:
         # Navigate to Planner URL
-        for attempt in range(3):
-            try:
-                driver.get(planner_url)
-                orchestrator_connection.log_info('Got planner url')
-                break
-            except Exception as e:
-                orchestrator_connection.log_info(f'Failed attempt {attempt+1}')
-                
+        def load_url():
+            driver.get(planner_url)
+        
+        orchestrator_connection.log_info("Starting load of planner URL")
+        t = threading.Thread(target=load_url)
+        t.start()
+        t.join(timeout=30)  # max ventetid
+        
+        if t.is_alive():
+            orchestrator_connection.log_info("Timeout: planner URL took too long")
+            driver.quit()
+            raise Exception("Timeout loading planner page")
+        else:
+            orchestrator_connection.log_info("Got planner url")
         
         orchestrator_connection.log_info("Waiting for dropdown to appear")
 
