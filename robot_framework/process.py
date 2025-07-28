@@ -14,8 +14,6 @@ from office365.sharepoint.client_context import ClientContext
 import os
 import time
 import json
-import threading 
-
 
 # pylint: disable-next=unused-argument
 def process(orchestrator_connection: OrchestratorConnection, queue_element: QueueElement, client: ClientContext | None = None) -> None:
@@ -72,24 +70,11 @@ def download_planner(downloads_folder, planner_url, final_file_path, orchestrato
 
     # Initialize Edge WebDriver
     driver = webdriver.Edge(options=options)
+    orchestrator_connection.log_info('Driver initialized')
     try:
         # Navigate to Planner URL
-        orchestrator_connection.log_info('Trying to get url')
-        def load_url():
-            driver.get(planner_url)
-        
-        orchestrator_connection.log_info("Starting load of planner URL")
-        t = threading.Thread(target=load_url)
-        t.start()
-        t.join(timeout=30)  # max ventetid
-        
-        if t.is_alive():
-            orchestrator_connection.log_info("Timeout: planner URL took too long")
-            driver.quit()
-            raise Exception("Timeout loading planner page")
-        else:
-            orchestrator_connection.log_info("Got planner url")
-        
+        driver.get(planner_url)
+             
         orchestrator_connection.log_info("Waiting for dropdown to appear")
 
         # Wait for the first element to load and interact with it
