@@ -73,7 +73,14 @@ def download_planner(downloads_folder, planner_url, final_file_path, orchestrato
     driver = webdriver.Edge(options=options)
     try:
         # Navigate to Planner URL
-        driver.get(planner_url)
+        for attempt in range(3):
+            try:
+                driver.get(planner_url)
+                orchestrator_connection.log_info('Got planner url')
+                break
+            except Exception as e:
+                orchestrator_connection.log_info(f'Failed attempt {attempt+1}')
+                
         
         orchestrator_connection.log_info("Waiting for dropdown to appear")
 
