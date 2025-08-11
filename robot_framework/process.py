@@ -56,6 +56,8 @@ def download_planner(downloads_folder, planner_url, final_file_path, orchestrato
     # Set up Edge options
     options = Options()
     options.add_argument("--user-data-dir=" + os.path.join(os.getenv("LOCALAPPDATA"), "Microsoft", "Edge", "User Data"))
+    options.add_argument("--headless=new")
+    options.add_argument("--disable-gpu")
     options.add_argument("--start-maximized")
     options.add_argument("--disable-extensions")
     options.add_argument("--profile-directory=Default")
