@@ -15,7 +15,6 @@ import os
 import time
 import json
 
-
 # pylint: disable-next=unused-argument
 def process(orchestrator_connection: OrchestratorConnection, queue_element: QueueElement, client: ClientContext | None = None) -> None:
     """Do the primary process of the robot."""
@@ -61,7 +60,7 @@ def download_planner(downloads_folder, planner_url, final_file_path, orchestrato
     options.add_argument("--start-maximized")
     options.add_argument("--disable-extensions")
     options.add_argument("--profile-directory=Default")
-    options.add_argument("--remote-debugging-port=9222")
+    # options.add_argument("--remote-debugging-port=9222")
 
     prefs = {
         "download.default_directory": downloads_folder,
@@ -73,10 +72,11 @@ def download_planner(downloads_folder, planner_url, final_file_path, orchestrato
 
     # Initialize Edge WebDriver
     driver = webdriver.Edge(options=options)
+    orchestrator_connection.log_info('Driver initialized')
     try:
         # Navigate to Planner URL
         driver.get(planner_url)
-        
+             
         orchestrator_connection.log_info("Waiting for dropdown to appear")
 
         # Wait for the first element to load and interact with it
