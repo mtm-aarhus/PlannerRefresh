@@ -2,6 +2,7 @@
 
 from OpenOrchestrator.orchestrator_connection.connection import OrchestratorConnection
 import subprocess
+import time
 
 def reset(orchestrator_connection: OrchestratorConnection) -> None:
     """Clean up, close/kill all programs and start them again. """
@@ -24,6 +25,7 @@ def kill_all(orchestrator_connection: OrchestratorConnection) -> None:
     orchestrator_connection.log_trace("Killing all applications.")
     subprocess.call("taskkill /F /IM msedge.exe /T", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True)
     subprocess.call("taskkill /F /IM msedgedriver.exe /T", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=True)
+    time.sleep(5)
 
 
 def open_all(orchestrator_connection: OrchestratorConnection) -> None:
