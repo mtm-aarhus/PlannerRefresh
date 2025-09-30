@@ -3,16 +3,12 @@
 from OpenOrchestrator.orchestrator_connection.connection import OrchestratorConnection
 from OpenOrchestrator.database.queues import QueueElement
 
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.edge.options import Options
-
 from office365.sharepoint.client_context import ClientContext
 
+import subprocess, sys
+import gc
+
 import os
-import time
 import json
 
 # pylint: disable-next=unused-argument
@@ -33,98 +29,23 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     if os.path.exists(final_file_path):
         os.remove(final_file_path)
     
-
     sharepoint_folder = "Shared Documents/PowerBi"
 
     try:
         orchestrator_connection.log_info("Initializing download")
-        download_planner(downloads_folder, planner_url, final_file_path, orchestrator_connection)
+        run_planner_subprocess(downloads_folder, planner_url, final_file_path, timeout_s=300,
+                            log=orchestrator_connection.log_error)
+
         orchestrator_connection.log_info("Uploading file to SharePoint")
         upload_file_to_sharepoint(client, sharepoint_folder, final_file_path, orchestrator_connection)
         if os.path.exists(final_file_path):
             os.remove(final_file_path)
-    except:
-        try:
+       
+    except Exception as ex:
+        gc.collect()
+        if os.path.exists(final_file_path):
             os.remove(final_file_path)
-        except FileNotFoundError as e:
-            print(f"Error: {e}")
-        raise
-    
-
-def download_planner(downloads_folder, planner_url, final_file_path, orchestrator_connection: OrchestratorConnection):
-    # Set up Edge options
-    options = Options()
-    options.add_argument("--user-data-dir=" + os.path.join(os.getenv("LOCALAPPDATA"), "Microsoft", "Edge", "User Data"))
-    options.add_argument("--start-maximized")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--profile-directory=Default")
-
-    prefs = {
-        "download.default_directory": downloads_folder,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "browser.show_hub_popup_on_download_start": False
-    }
-    options.add_experimental_option("prefs", prefs)
-
-    # Initialize Edge WebDriver
-    driver = webdriver.Edge(options=options)
-    orchestrator_connection.log_info('Driver initialized')
-    try:
-        # Navigate to Planner URL
-        driver.get(planner_url)
-             
-        orchestrator_connection.log_info("Waiting for dropdown to appear")
-
-        # Wait for the first element to load and interact with it
-        wait = WebDriverWait(driver, 60)
-        first_element = wait.until(EC.presence_of_element_located((By.XPATH, "//i[@data-icon-name='plannerChevronDownSmall']")))
-        first_element.click()
-        
-        orchestrator_connection.log_info("Waiting for export button to appear")
-
-        # Wait for the second element and click the export button
-        export_button = wait.until(EC.presence_of_element_located((By.XPATH, "//button[.//span[text()='Eksportér plan til Excel' or text()='Export plan to Excel']]")))
-        export_button.click()
-
-        # Wait for download to complete
-        initial_files = set(os.listdir(downloads_folder))
-        timeout = 60
-        start_time = time.time()
-        
-        orchestrator_connection.log_info("Waiting for download")
-
-        while True:
-            # Get the current list of files
-            current_files = set(os.listdir(downloads_folder))
-            new_files = current_files - initial_files
-            
-            # Check if new files have been added
-            if new_files:
-                # Filter for .xlsx files among the new files
-                xlsx_files = [file for file in new_files if file.lower().endswith(".xlsx")]
-                if xlsx_files:
-                    downloaded_file = os.path.join(downloads_folder, xlsx_files[0])
-                    orchestrator_connection.log_info(f"Download completed: {downloaded_file}")
-                    break
-            
-            # Check for timeout
-            if time.time() - start_time > timeout:
-                orchestrator_connection.log_info("Timeout reached while waiting for a download.")
-                break
-            
-            time.sleep(1)  # Avoid hammering the file system
-
-        os.rename(downloaded_file, final_file_path)
-
-    except:
-        try:
-            os.remove(final_file_path)
-        except FileNotFoundError as e:
-             orchestrator_connection.log_info(f"Tried removing downloaded file, didn't exist: {e}")
-        driver.quit()
-        raise
-        
+        raise ex
 
 
 def upload_file_to_sharepoint(client: ClientContext, sharepoint_file_url: str, local_file_path: str, orchestrator_connection: OrchestratorConnection):
@@ -156,3 +77,28 @@ def upload_file_to_sharepoint(client: ClientContext, sharepoint_file_url: str, l
         uploaded_file = target_folder.upload_file(file_name, file_content).execute_query()
 
     orchestrator_connection.log_info(f"[Ok] file has been uploaded to: {uploaded_file.serverRelativeUrl} on SharePoint")
+
+
+def run_planner_subprocess(downloads_folder, planner_url, final_file_path, timeout_s, log):
+    script = os.path.join(os.path.dirname(__file__), "planner_worker.py")
+    cmd = [sys.executable, "-u", script,
+           "--downloads", downloads_folder,
+           "--url", planner_url,
+           "--out", final_file_path]
+
+    # Ensure we can kill the whole tree on Windows
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+    proc = subprocess.Popen(cmd, creationflags=creationflags)
+
+    try:
+        proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        log("Worker timed out; killing process tree")
+        # Kill python child and any spawned msedgedriver/msedge
+        subprocess.run(f"taskkill /PID {proc.pid} /T /F", shell=True)
+        subprocess.run("taskkill /IM msedgedriver.exe /F /T >NUL 2>&1", shell=True)
+        subprocess.run("taskkill /IM msedge.exe /F /T >NUL 2>&1", shell=True)
+        raise RuntimeError("download_planner timed out")
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"download_planner failed (exit {proc.returncode})")
