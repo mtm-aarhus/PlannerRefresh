@@ -58,7 +58,6 @@ def download_planner(downloads_folder, planner_url, final_file_path, orchestrato
     options.add_argument("--start-maximized")
     options.add_argument("--disable-extensions")
     options.add_argument("--profile-directory=Default")
-    # options.add_argument("--remote-debugging-port=9222")
 
     prefs = {
         "download.default_directory": downloads_folder,
