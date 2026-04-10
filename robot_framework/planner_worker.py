@@ -23,12 +23,17 @@ def download_planner_worker(downloads_folder: str, planner_url: str, final_file_
     try:
         driver.get(planner_url)
         wait = WebDriverWait(driver, 20)  # shorter waits, repeat if needed
-        wait.until(EC.element_to_be_clickable((By.XPATH, "//i[@data-icon-name='plannerChevronDownSmall']"))).click()
+        # Open the menu (handles both Danish + English)
         wait.until(EC.element_to_be_clickable((
             By.XPATH,
-            "//button[.//span[normalize-space()='Eksportér plan til Excel' or normalize-space()='Export plan to Excel']]"
+            "//button[@aria-haspopup='true' and (contains(@aria-label, 'Plan options') or contains(@aria-label, 'Planindstillinger'))]"
         ))).click()
 
+        # Click export (handles variations like 'Eksportér', 'Eksporter', 'Export')
+        wait.until(EC.element_to_be_clickable((
+            By.XPATH,
+            "//*[@role='menuitem' and (contains(@aria-label, 'Export') or contains(@aria-label, 'Eksport') or contains(., 'Export') or contains(., 'Eksport'))]"
+        ))).click()
         initial = set(os.listdir(downloads_folder))
         start = time.time()
         while True:
