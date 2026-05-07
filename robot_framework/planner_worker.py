@@ -50,3 +50,15 @@ def download_planner_worker(downloads_folder: str, planner_url: str, final_file_
     finally:
         try: driver.quit()
         except Exception: pass
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("--downloads", required=True)
+    p.add_argument("--url", required=True)
+    p.add_argument("--out", required=True)
+    args = p.parse_args()
+    try:
+        download_planner_worker(args.downloads, args.url, args.out)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
