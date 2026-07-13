@@ -11,6 +11,8 @@ def download_planner_worker(downloads_folder: str, planner_url: str, final_file_
     options.add_argument("--start-maximized")
     options.add_argument("--disable-extensions")
     options.add_argument("--profile-directory=Default")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
     options.add_experimental_option("prefs", {
         "download.default_directory": downloads_folder,
         "download.prompt_for_download": False,
