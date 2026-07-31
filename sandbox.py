@@ -37,15 +37,15 @@ orchestrator_connection = OrchestratorConnection(
     os.getenv("OpenOrchestratorSQL"),
     os.getenv("OpenOrchestratorKey"),
     None,
+    None,
+    None
 )
 
 ctx = initialize(orchestrator_connection)
 
 qe = make_queue_element_with_payload(
     payload={
-        "Name": "Bystrategi_S7 - Penneo",
-        "URL": "https://tasks.office.com/aarhuskommune.onmicrosoft.com/da-DK/Home/Planner/#/plantaskboard?groupId=beacbc2b-a179-4b13-92c3-68727e8adc26&planId=r4KQ8i6trUu2h_nB-ObyI5YAAZNF"
-    },
+   },
     queue_name="PlannerRefresh",
     reference="Sandbox",
     status=QueueStatus.NEW, 

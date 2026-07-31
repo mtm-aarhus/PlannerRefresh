@@ -5,11 +5,15 @@ from OpenOrchestrator.database.queues import QueueElement
 
 from office365.sharepoint.client_context import ClientContext
 
-import subprocess, sys
+import subprocess
+import sys
 import gc
 
 import os
 import json
+import shutil
+import tempfile
+from urllib.parse import urlparse
 
 # pylint: disable-next=unused-argument
 def process(orchestrator_connection: OrchestratorConnection, queue_element: QueueElement, client: ClientContext | None = None) -> None:
@@ -21,9 +25,11 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
      # Assign each field to a named variable
 
     file_name = f'{data.get("Name")}.xlsx'
-    planner_url = data.get("URL")
+    planner_url = normalize_planner_url(data.get("URL"))
     
     downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
+    os.makedirs(downloads_folder, exist_ok=True)
+    worker_downloads_folder = tempfile.mkdtemp(prefix="PlannerRefresh_", dir=downloads_folder)
 
     final_file_path = os.path.join(downloads_folder, file_name)
     if os.path.exists(final_file_path):
@@ -33,8 +39,9 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
 
     try:
         orchestrator_connection.log_info("Initializing download")
-        run_planner_subprocess(downloads_folder, planner_url, final_file_path, timeout_s=300,
-                            log=orchestrator_connection.log_error)
+        run_planner_subprocess(worker_downloads_folder, planner_url, final_file_path, timeout_s=300,
+                            log_info=orchestrator_connection.log_info,
+                            log_error=orchestrator_connection.log_error)
 
         orchestrator_connection.log_info("Uploading file to SharePoint")
         upload_file_to_sharepoint(client, sharepoint_folder, final_file_path, orchestrator_connection)
@@ -46,6 +53,21 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
         if os.path.exists(final_file_path):
             os.remove(final_file_path)
         raise ex
+    finally:
+        shutil.rmtree(worker_downloads_folder, ignore_errors=True)
+
+
+def normalize_planner_url(planner_url: str | None) -> str:
+    """Validate and normalize the Planner URL from the queue payload."""
+    if not isinstance(planner_url, str) or not planner_url.strip():
+        raise ValueError("Queue element data is missing a non-empty 'URL' value")
+
+    planner_url = planner_url.strip()
+    parsed_url = urlparse(planner_url)
+    if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
+        raise ValueError(f"Queue element has an invalid Planner URL: {planner_url!r}")
+
+    return planner_url
 
 
 def upload_file_to_sharepoint(client: ClientContext, sharepoint_file_url: str, local_file_path: str, orchestrator_connection: OrchestratorConnection):
@@ -79,26 +101,60 @@ def upload_file_to_sharepoint(client: ClientContext, sharepoint_file_url: str, l
     orchestrator_connection.log_info(f"[Ok] file has been uploaded to: {uploaded_file.serverRelativeUrl} on SharePoint")
 
 
-def run_planner_subprocess(downloads_folder, planner_url, final_file_path, timeout_s, log):
+def run_planner_subprocess(downloads_folder, planner_url, final_file_path, timeout_s, log_info, log_error):
     script = os.path.join(os.path.dirname(__file__), "planner_worker.py")
     cmd = [sys.executable, "-u", script,
            "--downloads", downloads_folder,
            "--url", planner_url,
            "--out", final_file_path]
+    env = os.environ.copy()
+    env.setdefault("PYDEVD_DISABLE_FILE_VALIDATION", "1")
 
     # Ensure we can kill the whole tree on Windows
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
-    proc = subprocess.Popen(cmd, creationflags=creationflags)
+    proc = subprocess.Popen(
+        cmd,
+        creationflags=creationflags,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
 
     try:
-        proc.wait(timeout=timeout_s)
+        stdout, stderr = proc.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        log("Worker timed out; killing process tree")
+        log_error("Worker timed out; killing process tree")
         # Kill python child and any spawned msedgedriver/msedge
         subprocess.run(f"taskkill /PID {proc.pid} /T /F", shell=True)
         subprocess.run("taskkill /IM msedgedriver.exe /F /T >NUL 2>&1", shell=True)
         subprocess.run("taskkill /IM msedge.exe /F /T >NUL 2>&1", shell=True)
+        try:
+            stdout, stderr = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+        log_worker_output(stdout, stderr, log_info, log_error, failed=True)
         raise RuntimeError("download_planner timed out")
 
     if proc.returncode != 0:
-        raise RuntimeError(f"download_planner failed (exit {proc.returncode})")
+        log_worker_output(stdout, stderr, log_info, log_error, failed=True)
+        details = tail(stderr or stdout)
+        raise RuntimeError(f"download_planner failed (exit {proc.returncode}): {details}")
+
+    log_worker_output(stdout, stderr, log_info, log_error, failed=False)
+
+
+def log_worker_output(stdout: str, stderr: str, log_info, log_error, failed: bool) -> None:
+    """Forward worker output to OpenOrchestrator logs."""
+    if failed and stderr:
+        log_error(f"Planner worker stderr output:\n{tail(stderr)}")
+
+
+def tail(text: str, max_chars: int = 4000) -> str:
+    """Keep subprocess errors readable in the orchestrator log."""
+    if len(text) <= max_chars:
+        return text.strip()
+    return text[-max_chars:].strip()
