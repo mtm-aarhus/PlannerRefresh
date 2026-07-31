@@ -44,8 +44,7 @@ orchestrator_connection = OrchestratorConnection(
 ctx = initialize(orchestrator_connection)
 
 qe = make_queue_element_with_payload(
-    payload={
-   },
+    payload={},
     queue_name="PlannerRefresh",
     reference="Sandbox",
     status=QueueStatus.NEW, 

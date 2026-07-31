@@ -4,6 +4,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.edge.options import Options
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -34,12 +35,62 @@ def get_edge_user_data_dir() -> str:
     if configured_dir:
         return os.path.expandvars(os.path.expanduser(configured_dir))
 
+    if is_edge_browser_signin_forced():
+        return os.path.join(get_local_app_data_dir(), "Microsoft", "Edge", "User Data")
+
     return os.path.join(get_local_app_data_dir(), APP_NAME, "EdgeUserData")
 
 
-def get_edge_profile_directory() -> str:
+def is_valid_profile_directory(profile_directory: object) -> bool:
+    """Return whether a profile directory value is safe to pass to Edge."""
+    if not isinstance(profile_directory, str) or not profile_directory.strip():
+        return False
+
+    profile_directory = profile_directory.strip()
+    if os.path.isabs(profile_directory):
+        return False
+
+    return os.path.basename(profile_directory) == profile_directory
+
+
+def get_last_used_edge_profile_directory(edge_user_data_dir: str) -> str | None:
+    """Read Edge's last-used profile directory from Local State."""
+    local_state_path = os.path.join(edge_user_data_dir, "Local State")
+    if not os.path.exists(local_state_path):
+        return None
+
+    try:
+        with open(local_state_path, "r", encoding="utf-8") as file:
+            local_state = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    profile_state = local_state.get("profile", {})
+    info_cache = profile_state.get("info_cache") or {}
+
+    candidates = [
+        profile_state.get("last_used"),
+        *(profile_state.get("last_active_profiles") or []),
+    ]
+    for profile_directory, profile_info in info_cache.items():
+        if profile_info.get("user_name") and not profile_info.get("signin_required"):
+            candidates.append(profile_directory)
+
+    for profile_directory in candidates:
+        profile_info = info_cache.get(profile_directory, {})
+        if is_valid_profile_directory(profile_directory) and not profile_info.get("signin_required"):
+            return profile_directory.strip()
+
+    return None
+
+
+def get_edge_profile_directory(edge_user_data_dir: str) -> str:
     """Return a specific profile directory if the caller requested one."""
-    return os.getenv("PLANNER_EDGE_PROFILE_DIRECTORY", "").strip()
+    configured_profile = os.getenv("PLANNER_EDGE_PROFILE_DIRECTORY")
+    if configured_profile and configured_profile.strip():
+        return configured_profile.strip()
+
+    return get_last_used_edge_profile_directory(edge_user_data_dir) or "Default"
 
 
 def get_edge_binary_path() -> str:
@@ -103,6 +154,22 @@ def get_edge_policy_values(policy_name: str) -> list[tuple[str, object]]:
     return values
 
 
+def get_edge_policy_int(policy_name: str) -> int | None:
+    """Return the first integer value found for an Edge policy."""
+    for _, value in get_edge_policy_values(policy_name):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+
+    return None
+
+
+def is_edge_browser_signin_forced() -> bool:
+    """Return whether Edge policy requires browser profile sign-in."""
+    return get_edge_policy_int("BrowserSignin") == 2 or get_edge_policy_int("ForceBrowserSignin") == 1
+
+
 def assert_edge_webdriver_allowed_by_policy() -> None:
     """Fail clearly if Microsoft Edge policy blocks WebDriver's DevTools connection."""
     for hive_name, value in get_edge_policy_values("DeveloperToolsAvailability"):
@@ -116,6 +183,19 @@ def assert_edge_webdriver_allowed_by_policy() -> None:
                 "Microsoft Edge WebDriver is blocked by policy: "
                 f"{hive_name}\\SOFTWARE\\Policies\\Microsoft\\Edge "
                 "DeveloperToolsAvailability=2. Set it to 0 or 1 for the robot account/server."
+            )
+
+    for hive_name, value in get_edge_policy_values("ProfilePickerOnStartupAvailability"):
+        try:
+            policy_value = int(value)
+        except (TypeError, ValueError):
+            continue
+
+        if policy_value == 2:
+            raise RuntimeError(
+                "Microsoft Edge profile picker is forced by policy: "
+                f"{hive_name}\\SOFTWARE\\Policies\\Microsoft\\Edge "
+                "ProfilePickerOnStartupAvailability=2. Set it to 0 or 1 for the robot account/server."
             )
 
 
@@ -168,6 +248,24 @@ def log_page_diagnostics(driver, context: str) -> None:
         print(f"{context} title: {driver.title}", file=sys.stderr, flush=True)
     except Exception:
         pass
+
+
+def raise_if_edge_profile_picker(driver) -> None:
+    """Fail clearly if Edge blocks automation behind its profile sign-in picker."""
+    try:
+        current_url = driver.current_url
+    except Exception:
+        return
+
+    if "profile-picker" not in current_url:
+        return
+
+    raise RuntimeError(
+        "Microsoft Edge opened the profile sign-in picker instead of Planner. "
+        "This machine appears to require browser profile sign-in. Sign in once "
+        "to Edge with the robot's Windows account, or set PLANNER_EDGE_USER_DATA_DIR "
+        "and PLANNER_EDGE_PROFILE_DIRECTORY to an already signed-in Edge profile."
+    )
 
 
 def newest_completed_xlsx(downloads_folder: str, since: float) -> str | None:
@@ -228,33 +326,84 @@ def move_file_when_available(source_path: str, target_path: str, timeout_s: int 
             time.sleep(0.25)
 
 
+def configure_edge_startup_profile(edge_user_data_dir: str, edge_profile_directory: str) -> None:
+    """Prefer the automation profile and suppress Edge's profile picker."""
+    if not edge_profile_directory:
+        return
+
+    os.makedirs(os.path.join(edge_user_data_dir, edge_profile_directory), exist_ok=True)
+    local_state_path = os.path.join(edge_user_data_dir, "Local State")
+
+    try:
+        if os.path.exists(local_state_path):
+            with open(local_state_path, "r", encoding="utf-8") as file:
+                local_state = json.load(file)
+        else:
+            local_state = {}
+
+        profile_state = local_state.setdefault("profile", {})
+        profile_state["last_used"] = edge_profile_directory
+        profile_state["last_active_profiles"] = [edge_profile_directory]
+        profile_state["picker_shown"] = True
+        profile_state["show_picker_on_startup"] = False
+        profile_state["profile_counts_reported"] = "1"
+
+        profile_picker_state = local_state.setdefault("profile_picker", {})
+        profile_picker_state["enabled"] = False
+
+        temp_path = local_state_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as file:
+            json.dump(local_state, file, separators=(",", ":"))
+        os.replace(temp_path, local_state_path)
+    except (OSError, json.JSONDecodeError):
+        return
+
+
+def edge_local_state_options(edge_profile_directory: str) -> dict:
+    """Return Edge local state preferences for deterministic profile startup."""
+    return {
+        "profile": {
+            "last_used": edge_profile_directory,
+            "last_active_profiles": [edge_profile_directory],
+            "picker_shown": True,
+            "show_picker_on_startup": False,
+        },
+        "profile_picker": {
+            "enabled": False,
+        },
+    }
+
+
 def download_planner_worker(downloads_folder: str, planner_url: str, final_file_path: str) -> None:
     planner_url = validate_planner_url(planner_url)
     os.makedirs(downloads_folder, exist_ok=True)
 
     options = Options()
     edge_user_data_dir = get_edge_user_data_dir()
-    edge_profile_directory = get_edge_profile_directory()
+    edge_profile_directory = get_edge_profile_directory(edge_user_data_dir)
     edge_binary_path = get_edge_binary_path()
 
     os.makedirs(edge_user_data_dir, exist_ok=True)
+    configure_edge_startup_profile(edge_user_data_dir, edge_profile_directory)
 
     if edge_binary_path:
         options.binary_location = edge_binary_path
     options.add_argument("--user-data-dir=" + edge_user_data_dir)
     if edge_profile_directory:
         options.add_argument("--profile-directory=" + edge_profile_directory)
+    options.add_argument(planner_url)
     options.add_argument("--start-maximized")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-gpu")
-    options.add_argument("--disable-features=CalculateNativeWinOcclusion")
+    options.add_argument("--disable-features=CalculateNativeWinOcclusion,EnableProfilePickerOnStartup")
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-renderer-backgrounding")
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
     if is_truthy(os.getenv("PLANNER_EDGE_HEADLESS")):
         options.add_argument("--headless=new")
+    options.add_experimental_option("localState", edge_local_state_options(edge_profile_directory))
     options.add_experimental_option("prefs", {
         "download.default_directory": downloads_folder,
         "download.prompt_for_download": False,
@@ -268,7 +417,9 @@ def download_planner_worker(downloads_folder: str, planner_url: str, final_file_
     downloaded_file = None
     try:
         driver.set_page_load_timeout(60)
+        raise_if_edge_profile_picker(driver)
         driver.get(planner_url)
+        raise_if_edge_profile_picker(driver)
         if driver.current_url in ("about:blank", "data:,"):
             raise RuntimeError("Edge stayed on a blank page after navigating to the Planner URL")
 
