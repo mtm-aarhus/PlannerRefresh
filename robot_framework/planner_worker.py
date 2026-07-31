@@ -268,64 +268,6 @@ def raise_if_edge_profile_picker(driver) -> None:
     )
 
 
-def newest_completed_xlsx(downloads_folder: str, since: float) -> str | None:
-    """Return the newest completed Excel file downloaded after the export click."""
-    candidates = []
-    for file_name in os.listdir(downloads_folder):
-        file_path = os.path.join(downloads_folder, file_name)
-        if not os.path.isfile(file_path):
-            continue
-        if not file_name.lower().endswith(".xlsx"):
-            continue
-        if os.path.getmtime(file_path) < since - 1:
-            continue
-
-        candidates.append((os.path.getmtime(file_path), file_path))
-
-    if not candidates:
-        return None
-
-    return max(candidates)[1]
-
-
-def has_active_download(downloads_folder: str) -> bool:
-    """Return whether Edge still has an incomplete download in the folder."""
-    active_extensions = (".crdownload", ".tmp")
-    return any(file_name.lower().endswith(active_extensions) for file_name in os.listdir(downloads_folder))
-
-
-def wait_for_completed_xlsx(downloads_folder: str, since: float, timeout_s: int = 60) -> str:
-    """Wait until Edge has produced a stable .xlsx file."""
-    deadline = time.time() + timeout_s
-    last_seen_sizes = {}
-
-    while time.time() < deadline:
-        downloaded_file = newest_completed_xlsx(downloads_folder, since)
-        if downloaded_file and not has_active_download(downloads_folder):
-            file_size = os.path.getsize(downloaded_file)
-            if file_size > 0 and last_seen_sizes.get(downloaded_file) == file_size:
-                return downloaded_file
-
-            last_seen_sizes[downloaded_file] = file_size
-
-        time.sleep(0.25)
-
-    raise TimeoutError("No completed .xlsx detected within 60s")
-
-
-def move_file_when_available(source_path: str, target_path: str, timeout_s: int = 10) -> None:
-    """Move the downloaded file as soon as Edge releases the file handle."""
-    deadline = time.time() + timeout_s
-    while True:
-        try:
-            os.replace(source_path, target_path)
-            return
-        except PermissionError:
-            if time.time() >= deadline:
-                raise
-            time.sleep(0.25)
-
-
 def configure_edge_startup_profile(edge_user_data_dir: str, edge_profile_directory: str) -> None:
     """Prefer the automation profile and suppress Edge's profile picker."""
     if not edge_profile_directory:
@@ -442,10 +384,20 @@ def download_planner_worker(downloads_folder: str, planner_url: str, final_file_
             log_page_diagnostics(driver, "Planner wait failed")
             raise
 
-        download_started_at = time.time()
+        initial = set(os.listdir(downloads_folder))
         export_button.click()
-        downloaded_file = wait_for_completed_xlsx(downloads_folder, download_started_at)
-        move_file_when_available(downloaded_file, final_file_path)
+        start = time.time()
+        while True:
+            new = [f for f in (set(os.listdir(downloads_folder)) - initial) if f.lower().endswith(".xlsx")]
+            if new:
+                downloaded_file = os.path.join(downloads_folder, sorted(new)[0])
+                break
+            if time.time() - start > 60:
+                raise TimeoutError("No .xlsx detected within 60s")
+            time.sleep(1)
+
+        time.sleep(2)
+        os.replace(downloaded_file, final_file_path)
     finally:
         try: driver.quit()
         except Exception: pass

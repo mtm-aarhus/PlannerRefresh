@@ -11,8 +11,6 @@ import gc
 
 import os
 import json
-import shutil
-import tempfile
 from urllib.parse import urlparse
 
 # pylint: disable-next=unused-argument
@@ -29,7 +27,6 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     
     downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
     os.makedirs(downloads_folder, exist_ok=True)
-    worker_downloads_folder = tempfile.mkdtemp(prefix="PlannerRefresh_", dir=downloads_folder)
 
     final_file_path = os.path.join(downloads_folder, file_name)
     if os.path.exists(final_file_path):
@@ -39,7 +36,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
 
     try:
         orchestrator_connection.log_info("Initializing download")
-        run_planner_subprocess(worker_downloads_folder, planner_url, final_file_path, timeout_s=300,
+        run_planner_subprocess(downloads_folder, planner_url, final_file_path, timeout_s=300,
                             log_info=orchestrator_connection.log_info,
                             log_error=orchestrator_connection.log_error)
 
@@ -53,8 +50,6 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
         if os.path.exists(final_file_path):
             os.remove(final_file_path)
         raise ex
-    finally:
-        shutil.rmtree(worker_downloads_folder, ignore_errors=True)
 
 
 def normalize_planner_url(planner_url: str | None) -> str:
