@@ -38,7 +38,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
         orchestrator_connection.log_info("Initializing download")
         run_planner_subprocess(downloads_folder, planner_url, final_file_path, timeout_s=300,
                             log_info=orchestrator_connection.log_info,
-                            log_error=orchestrator_connection.log_error)
+                            log_error=orchestrator_connection.log_info)
 
         orchestrator_connection.log_info("Uploading file to SharePoint")
         upload_file_to_sharepoint(client, sharepoint_folder, final_file_path, orchestrator_connection)

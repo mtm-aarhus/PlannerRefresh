@@ -367,7 +367,7 @@ def download_planner_worker(downloads_folder: str, planner_url: str, final_file_
 
         restore_planner_fragment_after_redirect(driver, planner_url)
 
-        wait = WebDriverWait(driver, 45)
+        wait = WebDriverWait(driver, 60)
         try:
             # Open the menu (handles both Danish + English)
             wait.until(EC.element_to_be_clickable((
