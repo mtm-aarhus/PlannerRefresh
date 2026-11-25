@@ -35,10 +35,14 @@ def get_edge_user_data_dir() -> str:
     if configured_dir:
         return os.path.expandvars(os.path.expanduser(configured_dir))
 
-    if is_edge_browser_signin_forced():
-        return os.path.join(get_local_app_data_dir(), "Microsoft", "Edge", "User Data")
+    app_data_dir = os.path.join(get_local_app_data_dir(), APP_NAME)
+    automation_dir = os.path.join(app_data_dir, "EdgeAutomation")
+    previous_dir = os.path.join(app_data_dir, "EdgeUserData")
+    # Preserve profiles already used by older versions of the worker.
+    if not os.path.exists(automation_dir) and os.path.isfile(os.path.join(previous_dir, "Local State")):
+        return previous_dir
 
-    return os.path.join(get_local_app_data_dir(), APP_NAME, "EdgeUserData")
+    return automation_dir
 
 
 def is_valid_profile_directory(profile_directory: object) -> bool:
@@ -152,22 +156,6 @@ def get_edge_policy_values(policy_name: str) -> list[tuple[str, object]]:
             values.append((f"{hive_name} {access_name}", value))
 
     return values
-
-
-def get_edge_policy_int(policy_name: str) -> int | None:
-    """Return the first integer value found for an Edge policy."""
-    for _, value in get_edge_policy_values(policy_name):
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            continue
-
-    return None
-
-
-def is_edge_browser_signin_forced() -> bool:
-    """Return whether Edge policy requires browser profile sign-in."""
-    return get_edge_policy_int("BrowserSignin") == 2 or get_edge_policy_int("ForceBrowserSignin") == 1
 
 
 def assert_edge_webdriver_allowed_by_policy() -> None:
