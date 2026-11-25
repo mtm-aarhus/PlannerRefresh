@@ -1,5 +1,5 @@
 from selenium import webdriver
-from selenium.common.exceptions import NoSuchWindowException, WebDriverException
+from selenium.common.exceptions import InvalidSessionIdException, NoSuchWindowException, WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -243,32 +243,48 @@ def log_page_diagnostics(driver, context: str) -> None:
         pass
 
 
+def is_edge_profile_sign_in(url: str) -> bool:
+    """Identify browser profile sign-in windows before navigating."""
+    page = urlparse(url)
+    return page.scheme in ("edge", "chrome") and page.hostname in ("force-signin", "profile-picker")
+
+
 def open_planner_in_ready_window(driver, planner_url: str) -> None:
     """Wait for a browser window that survives Edge's startup transitions."""
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 30
     last_error = None
-    while time.monotonic() < deadline:
-        for handle in driver.window_handles:
-            try:
-                driver.switch_to.window(handle)
-                if "profile-picker" in driver.current_url:
-                    continue
-                driver.get(planner_url)
-                if "profile-picker" not in driver.current_url:
-                    return
-            except NoSuchWindowException as error:
-                last_error = error
-            except WebDriverException as error:
-                message = (error.msg or "").lower()
-                if "target frame detached" not in message and "unable to receive message from renderer" not in message:
-                    raise
-                last_error = error
-        time.sleep(0.5)
+    saw_profile_sign_in = False
+    try:
+        while time.monotonic() < deadline:
+            for handle in driver.window_handles:
+                try:
+                    driver.switch_to.window(handle)
+                    if is_edge_profile_sign_in(driver.current_url):
+                        saw_profile_sign_in = True
+                        continue
+                    driver.get(planner_url)
+                    if not is_edge_profile_sign_in(driver.current_url):
+                        return
+                    saw_profile_sign_in = True
+                except NoSuchWindowException as error:
+                    last_error = error
+                except WebDriverException as error:
+                    message = (error.msg or "").lower()
+                    if "target frame detached" not in message and "unable to receive message from renderer" not in message:
+                        raise
+                    last_error = error
+            time.sleep(0.5)
+    except InvalidSessionIdException as error:
+        if saw_profile_sign_in:
+            raise RuntimeError("Edge closed its session while waiting for browser profile sign-in.") from error
+        raise
 
-    raise RuntimeError(
-        "Edge did not provide a stable browser window for Planner. "
-        "Check whether Edge is waiting for profile sign-in under the robot's Windows account."
-    ) from last_error
+    if saw_profile_sign_in:
+        raise RuntimeError(
+            "Edge did not finish browser profile sign-in within 30 seconds. "
+            "Check implicit sign-in for the robot's Windows session."
+        ) from last_error
+    raise RuntimeError("Edge did not provide a stable browser window for Planner.") from last_error
 
 
 def download_planner_worker(downloads_folder: str, planner_url: str, final_file_path: str) -> None:
