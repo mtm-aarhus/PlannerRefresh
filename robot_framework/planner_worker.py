@@ -1,4 +1,5 @@
 from selenium import webdriver
+from selenium.common.exceptions import NoSuchWindowException, WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -215,6 +216,8 @@ def restore_planner_fragment_after_redirect(driver, original_url: str) -> None:
     original = urlparse(original_url)
     current = urlparse(driver.current_url)
 
+    if current.hostname not in (original.hostname, "planner.cloud.microsoft"):
+        return
     if not original.fragment or not fragment_has_plan_identity(original.fragment):
         return
 
@@ -228,7 +231,8 @@ def restore_planner_fragment_after_redirect(driver, original_url: str) -> None:
 def log_page_diagnostics(driver, context: str) -> None:
     """Log enough browser state to make blank Selenium wait errors diagnosable."""
     try:
-        print(f"{context} current URL: {driver.current_url}", file=sys.stderr, flush=True)
+        page = urlparse(driver.current_url)
+        print(f"{context} current page: {page._replace(query='', fragment='').geturl()}", file=sys.stderr, flush=True)
     except Exception:
         pass
 
@@ -238,70 +242,32 @@ def log_page_diagnostics(driver, context: str) -> None:
         pass
 
 
-def raise_if_edge_profile_picker(driver) -> None:
-    """Fail clearly if Edge blocks automation behind its profile sign-in picker."""
-    try:
-        current_url = driver.current_url
-    except Exception:
-        return
-
-    if "profile-picker" not in current_url:
-        return
+def open_planner_in_ready_window(driver, planner_url: str) -> None:
+    """Wait for a browser window that survives Edge's startup transitions."""
+    deadline = time.monotonic() + 15
+    last_error = None
+    while time.monotonic() < deadline:
+        for handle in driver.window_handles:
+            try:
+                driver.switch_to.window(handle)
+                if "profile-picker" in driver.current_url:
+                    continue
+                driver.get(planner_url)
+                if "profile-picker" not in driver.current_url:
+                    return
+            except NoSuchWindowException as error:
+                last_error = error
+            except WebDriverException as error:
+                message = (error.msg or "").lower()
+                if "target frame detached" not in message and "unable to receive message from renderer" not in message:
+                    raise
+                last_error = error
+        time.sleep(0.5)
 
     raise RuntimeError(
-        "Microsoft Edge opened the profile sign-in picker instead of Planner. "
-        "This machine appears to require browser profile sign-in. Sign in once "
-        "to Edge with the robot's Windows account, or set PLANNER_EDGE_USER_DATA_DIR "
-        "and PLANNER_EDGE_PROFILE_DIRECTORY to an already signed-in Edge profile."
-    )
-
-
-def configure_edge_startup_profile(edge_user_data_dir: str, edge_profile_directory: str) -> None:
-    """Prefer the automation profile and suppress Edge's profile picker."""
-    if not edge_profile_directory:
-        return
-
-    os.makedirs(os.path.join(edge_user_data_dir, edge_profile_directory), exist_ok=True)
-    local_state_path = os.path.join(edge_user_data_dir, "Local State")
-
-    try:
-        if os.path.exists(local_state_path):
-            with open(local_state_path, "r", encoding="utf-8") as file:
-                local_state = json.load(file)
-        else:
-            local_state = {}
-
-        profile_state = local_state.setdefault("profile", {})
-        profile_state["last_used"] = edge_profile_directory
-        profile_state["last_active_profiles"] = [edge_profile_directory]
-        profile_state["picker_shown"] = True
-        profile_state["show_picker_on_startup"] = False
-        profile_state["profile_counts_reported"] = "1"
-
-        profile_picker_state = local_state.setdefault("profile_picker", {})
-        profile_picker_state["enabled"] = False
-
-        temp_path = local_state_path + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as file:
-            json.dump(local_state, file, separators=(",", ":"))
-        os.replace(temp_path, local_state_path)
-    except (OSError, json.JSONDecodeError):
-        return
-
-
-def edge_local_state_options(edge_profile_directory: str) -> dict:
-    """Return Edge local state preferences for deterministic profile startup."""
-    return {
-        "profile": {
-            "last_used": edge_profile_directory,
-            "last_active_profiles": [edge_profile_directory],
-            "picker_shown": True,
-            "show_picker_on_startup": False,
-        },
-        "profile_picker": {
-            "enabled": False,
-        },
-    }
+        "Edge did not provide a stable browser window for Planner. "
+        "Check whether Edge is waiting for profile sign-in under the robot's Windows account."
+    ) from last_error
 
 
 def download_planner_worker(downloads_folder: str, planner_url: str, final_file_path: str) -> None:
@@ -314,26 +280,23 @@ def download_planner_worker(downloads_folder: str, planner_url: str, final_file_
     edge_binary_path = get_edge_binary_path()
 
     os.makedirs(edge_user_data_dir, exist_ok=True)
-    configure_edge_startup_profile(edge_user_data_dir, edge_profile_directory)
 
     if edge_binary_path:
         options.binary_location = edge_binary_path
     options.add_argument("--user-data-dir=" + edge_user_data_dir)
     if edge_profile_directory:
         options.add_argument("--profile-directory=" + edge_profile_directory)
-    options.add_argument(planner_url)
     options.add_argument("--start-maximized")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-gpu")
-    options.add_argument("--disable-features=CalculateNativeWinOcclusion,EnableProfilePickerOnStartup")
+    options.add_argument("--disable-features=CalculateNativeWinOcclusion")
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-renderer-backgrounding")
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
     if is_truthy(os.getenv("PLANNER_EDGE_HEADLESS")):
         options.add_argument("--headless=new")
-    options.add_experimental_option("localState", edge_local_state_options(edge_profile_directory))
     options.add_experimental_option("prefs", {
         "download.default_directory": downloads_folder,
         "download.prompt_for_download": False,
@@ -342,14 +305,18 @@ def download_planner_worker(downloads_folder: str, planner_url: str, final_file_
     })
 
     assert_edge_webdriver_allowed_by_policy()
-    driver = webdriver.Edge(options=options)
+    try:
+        driver = webdriver.Edge(options=options)
+    except WebDriverException as error:
+        raise RuntimeError(f"Edge WebDriver session creation failed: {error.msg}") from error
 
     downloaded_file = None
     try:
         driver.set_page_load_timeout(60)
-        raise_if_edge_profile_picker(driver)
-        driver.get(planner_url)
-        raise_if_edge_profile_picker(driver)
+        try:
+            open_planner_in_ready_window(driver, planner_url)
+        except WebDriverException as error:
+            raise RuntimeError(f"Edge lost its browser window during Planner navigation: {error.msg}") from error
         if driver.current_url in ("about:blank", "data:,"):
             raise RuntimeError("Edge stayed on a blank page after navigating to the Planner URL")
 
