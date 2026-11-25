@@ -4,6 +4,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.service import Service
 import argparse
 import json
 import os
@@ -305,8 +306,11 @@ def download_planner_worker(downloads_folder: str, planner_url: str, final_file_
     })
 
     assert_edge_webdriver_allowed_by_policy()
+    log_path = os.path.join(edge_user_data_dir, "msedgedriver.log")
+    service = Service(service_args=["--verbose"], log_output=log_path)
+    print(f"EdgeDriver log file {log_path}", file=sys.stderr, flush=True)
     try:
-        driver = webdriver.Edge(options=options)
+        driver = webdriver.Edge(options=options, service=service)
     except WebDriverException as error:
         raise RuntimeError(f"Edge WebDriver session creation failed: {error.msg}") from error
 
